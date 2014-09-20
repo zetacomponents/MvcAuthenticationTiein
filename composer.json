@@ -25,5 +25,9 @@
     "homepage": "https://github.com/zetacomponents",
     "license": "apache2",
     "name": "zetacomponents/mvc-authentication-tiein",
-    "type": "library"
+    "type": "library",
+    "require": {
+        "zetacomponents/mvc-tools": "~1.1",
+        "zetacomponents/authentication": "~1.3"
+    }
 }
