@@ -1,3 +1,23 @@
+1.2 - [RELEASEDATE]
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+- Changed: Passwords are hashed with password_hash() instead of unsalted MD5.
+  Stored MD5 hashes are still accepted and replaced with a new hash on the
+  next successful login, unless the new option rehashPasswords is false.
+- Fixed: generatePassword() uses random_int() instead of a predictable seed.
+- Fixed: createUser() quotes the column names of $extraInfo and the configured
+  table and field names.
+- Fixed: No md5( null ) deprecation when the user is taken from the session.
+- Added: zetacomponents/authentication-database-tiein as a dependency.
+
+Upgrading: the password column of the user table must hold at least 60
+characters, 255 are recommended because the length of PASSWORD_DEFAULT hashes
+can grow. A column sized for MD5 hashes (VARCHAR(32)) has to be widened. Until
+then a legacy hash is kept when the database rejects or truncates the new one,
+and logins keep working with it; set the option rehashPasswords to false to
+avoid the extra queries.
+
+
 1.1 - Saturday 27 September 2014
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 

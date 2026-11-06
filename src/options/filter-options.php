@@ -39,6 +39,11 @@
  * @property string $sessionTimestampKey  The name of the session variable that contains the last-accessed timestamp.
  * @property string $loginRequiredUri     The URI that the filter will be redirected to when authentication is required.
  * @property string $logoutUri            The URI that the filter will be redirected to when he runs the logout action.
+ * @property bool $rehashPasswords        Whether a stored password hash that was not created by password_hash()
+ *                                        with the current default options (for example an MD5 hash) is replaced
+ *                                        with a new hash on a successful login. Default true. The password
+ *                                        column must hold at least 60 characters (255 recommended); set this to
+ *                                        false until a column sized for MD5 hashes (32 characters) is widened.
  *
  * @package MvcAuthenticationTiein
  * @version //autogen//
@@ -71,6 +76,8 @@ class ezcMvcAuthenticationFilterOptions extends ezcBaseOptions
 
         $this->loginRequiredUri = '/login-required';
         $this->logoutUri = '/';
+
+        $this->rehashPasswords = true;
 
         parent::__construct( $options );
     }
@@ -111,6 +118,14 @@ class ezcMvcAuthenticationFilterOptions extends ezcBaseOptions
                 if ( !is_string( $value ) )
                 {
                     throw new ezcBaseValueException( $name, $value, 'string' );
+                }
+                $this->properties[$name] = $value;
+                break;
+
+            case 'rehashPasswords':
+                if ( !is_bool( $value ) )
+                {
+                    throw new ezcBaseValueException( $name, $value, 'bool' );
                 }
                 $this->properties[$name] = $value;
                 break;

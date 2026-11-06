@@ -162,6 +162,13 @@ class ezcMvcAuthenticationFilter
      * filter needs to check whether a user is already logged in. In this case,
      * the session should be checked.
      *
+     * The database filter compares the password of the credentials with the
+     * stored password hash. The clear text $password is therefore verified
+     * first with verifyPassword(), and on success the credentials carry the
+     * stored hash. Hashes created with an older algorithm (like the unsalted
+     * MD5 hashes of earlier versions) are replaced with a new hash from
+     * hashPassword() on a successful login.
+     *
      * @param string $user
      * @param string $password
      *
@@ -191,7 +198,13 @@ class ezcMvcAuthenticationFilter
             $password = null;
         }
 
-        $credentials = new ezcAuthenticationPasswordCredentials( $user, $this->hashPassword( $password ) );
+        $hash = null;
+        if ( $password !== null )
+        {
+            $hash = $this->fetchVerifiedPasswordHash( $user, $password );
+        }
+
+        $credentials = new ezcAuthenticationPasswordCredentials( $user, $hash );
         $authentication = new ezcAuthentication( $credentials );
         $authentication->session = $session;
         $authentication->addFilter( $databaseFilter );
@@ -348,24 +361,25 @@ class ezcMvcAuthenticationFilter
     }
 
     /**
-     * Returns a generated basic password depending on the $username.
+     * Returns a random password of 12 lower case letters and digits.
      *
      * This method is typically called from the "register" action after a user
-     * ID has been checked for existance.
+     * ID has been checked for existance. The password is generated with
+     * random_int(), a cryptographically secure generator; $username is not
+     * used, the parameter is kept for compatibility.
      *
      * @param string $username
      * @return string
      */
     public function generatePassword( $username )
     {
-        // generate password
-        mt_srand(
-            base_convert( substr( md5( $username ), 0, 6 ), 36, 10 ) *
-            microtime( true )
-        );
-        $a = base_convert( mt_rand(), 10, 36 );
-        $b = base_convert( mt_rand(), 10, 36 );
-        $password = substr( $b . $a, 1, 8 );
+        $chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+        $max = strlen( $chars ) - 1;
+        $password = '';
+        for ( $i = 0; $i < 12; $i++ )
+        {
+            $password .= $chars[random_int( 0, $max )];
+        }
 
         return $password;
     }
@@ -373,12 +387,227 @@ class ezcMvcAuthenticationFilter
     /**
      * Returns the hashed version of the clear text password
      *
+     * The hash is created with password_hash() and the default algorithm of
+     * PHP. The password field of the user table needs to be able to store at
+     * least 60 characters, 255 characters are recommended.
+     *
+     * The default algorithm is bcrypt, which only uses the first 72 bytes of
+     * the password: two passwords that share their first 72 bytes produce the
+     * same result in verifyPassword(). Multi-byte UTF-8 characters count with
+     * their byte length. Applications that allow longer passwords should
+     * limit their length, or override this method and verifyPassword().
+     *
      * @param string $password
      * @return string
      */
     protected function hashPassword( $password )
     {
-        return md5( $password );
+        return password_hash( (string) $password, PASSWORD_DEFAULT );
+    }
+
+    /**
+     * Returns true if the clear text $password matches the stored $hash.
+     *
+     * Hashes created by password_hash() are checked with password_verify().
+     * Other hashes are compared in constant time with the unsalted MD5 hash
+     * which earlier versions stored, and with the result of hashPassword(),
+     * so that an overridden hashPassword() with a deterministic hash keeps
+     * working.
+     *
+     * @param string $password
+     * @param string $hash
+     * @return bool
+     */
+    protected function verifyPassword( $password, $hash )
+    {
+        $password = (string) $password;
+        $hash = (string) $hash;
+
+        if ( $hash === '' )
+        {
+            return false;
+        }
+
+        if ( !$this->isLegacyHash( $hash ) )
+        {
+            return password_verify( $password, $hash );
+        }
+
+        return hash_equals( strtolower( $hash ), md5( $password ) )
+            || hash_equals( $hash, (string) $this->hashPassword( $password ) );
+    }
+
+    /**
+     * Returns true if $hash was not created by password_hash(), or if it was
+     * created with other options than the current default ones.
+     *
+     * Such hashes are replaced with a new hash on the next successful login.
+     *
+     * @param string $hash
+     * @return bool
+     */
+    protected function needsRehash( $hash )
+    {
+        return $this->isLegacyHash( $hash ) || password_needs_rehash( $hash, PASSWORD_DEFAULT );
+    }
+
+    /**
+     * Returns true if $hash was not created by password_hash().
+     *
+     * @param string $hash
+     * @return bool
+     */
+    private function isLegacyHash( $hash )
+    {
+        $info = password_get_info( (string) $hash );
+        return empty( $info['algo'] );
+    }
+
+    /**
+     * Set to true when storing a new hash failed, so that it is not tried
+     * again by this object.
+     *
+     * @var bool
+     */
+    private $rehashFailed = false;
+
+    /**
+     * Returns the stored password hash of $username if $password matches it,
+     * and null otherwise.
+     *
+     * If the stored hash needs to be replaced (see needsRehash()) and the
+     * option rehashPasswords is true, the new hash is stored in the user
+     * table and returned. If storing it fails, because the database rejects
+     * the value (a password column that is too short, in strict mode) or
+     * stores it truncated, the old hash is kept, the login still succeeds
+     * with it, and this object does not try to rehash again. Widen the
+     * password column (see hashPassword()) or set rehashPasswords to false.
+     *
+     * For an unknown user a password hash is still computed, so that the
+     * response time does not tell whether the user exists.
+     *
+     * @param string $username
+     * @param string $password
+     * @return string|null
+     */
+    protected function fetchVerifiedPasswordHash( $username, $password )
+    {
+        $hash = $this->fetchStoredPasswordHash( $username );
+        if ( $hash === null )
+        {
+            // same work as for an existing user, against the current default cost
+            password_hash( (string) $password, PASSWORD_DEFAULT );
+            return null;
+        }
+
+        if ( !$this->verifyPassword( $password, $hash ) )
+        {
+            return null;
+        }
+
+        if ( $this->options->rehashPasswords && !$this->rehashFailed && $this->needsRehash( $hash ) )
+        {
+            $newHash = (string) $this->hashPassword( $password );
+            if ( $newHash !== $hash )
+            {
+                return $this->replacePasswordHash( $username, $hash, $newHash );
+            }
+        }
+
+        return $hash;
+    }
+
+    /**
+     * Replaces the stored password hash $oldHash of $username with $newHash
+     * and returns the hash that is stored afterwards.
+     *
+     * The stored value is read back after the update. If the update was
+     * rejected, or the value was stored truncated, $oldHash is put back and
+     * returned, and rehashing is switched off for this object. Null is only
+     * returned if $oldHash could not be restored either.
+     *
+     * @param string $username
+     * @param string $oldHash
+     * @param string $newHash
+     * @return string|null
+     */
+    private function replacePasswordHash( $username, $oldHash, $newHash )
+    {
+        try
+        {
+            if ( $this->storePasswordHash( $username, $newHash ) &&
+                 $this->fetchStoredPasswordHash( $username ) === $newHash )
+            {
+                return $newHash;
+            }
+
+            $this->rehashFailed = true;
+            if ( $this->fetchStoredPasswordHash( $username ) !== $oldHash )
+            {
+                $this->storePasswordHash( $username, $oldHash );
+                if ( $this->fetchStoredPasswordHash( $username ) !== $oldHash )
+                {
+                    return null;
+                }
+            }
+        }
+        catch ( Exception $e )
+        {
+            $this->rehashFailed = true;
+        }
+
+        return $oldHash;
+    }
+
+    /**
+     * Returns the stored password hash of $username, or null if there is not
+     * exactly one user with this ID.
+     *
+     * @param string $username
+     * @return string|null
+     */
+    private function fetchStoredPasswordHash( $username )
+    {
+        $db = $this->options->database;
+
+        $q = $db->createSelectQuery();
+        $q->select( $db->quoteIdentifier( $this->options->passwordField ) )
+          ->from( $db->quoteIdentifier( $this->options->tableName ) )
+          ->where( $q->expr->eq( $db->quoteIdentifier( $this->options->userIdField ), $q->bindValue( $username ) ) );
+        $s = $q->prepare();
+        $s->execute();
+        $rows = $s->fetchAll( PDO::FETCH_NUM );
+        $s->closeCursor();
+
+        return count( $rows ) === 1 ? (string) $rows[0][0] : null;
+    }
+
+    /**
+     * Stores $hash as the password hash of $username.
+     *
+     * Returns false if the database rejected the update.
+     *
+     * @param string $username
+     * @param string $hash
+     * @return bool
+     */
+    private function storePasswordHash( $username, $hash )
+    {
+        $db = $this->options->database;
+
+        try
+        {
+            $q = $db->createUpdateQuery();
+            $q->update( $db->quoteIdentifier( $this->options->tableName ) )
+              ->set( $db->quoteIdentifier( $this->options->passwordField ), $q->bindValue( $hash ) )
+              ->where( $q->expr->eq( $db->quoteIdentifier( $this->options->userIdField ), $q->bindValue( $username ) ) );
+            $s = $q->prepare();
+            return $s->execute() !== false;
+        }
+        catch ( Exception $e )
+        {
+            return false;
+        }
     }
 
     /**
@@ -386,8 +615,9 @@ class ezcMvcAuthenticationFilter
      *
      * This method creates a user in the configured user table (through the
      * options for this class). You can specify extra information as a
-     * key->value pair array as $extraInfo.  This method does *not* check
-     * whether a user already exists.
+     * key->value pair array as $extraInfo. The keys are the column names, they
+     * are quoted as identifiers. This method does *not* check whether a user
+     * already exists.
      *
      * @param string $username
      * @param string $password
@@ -395,13 +625,14 @@ class ezcMvcAuthenticationFilter
      */
     public function createUser( $username, $password, array $extraInfo )
     {
-        $q = ezcDbInstance::get()->createInsertQuery();
-        $q->insertInto( $this->options->tableName )
-          ->set( $this->options->userIdField, $q->bindValue( $username ) )
-          ->set( $this->options->passwordField, $q->bindValue( $this->hashPassword( $password ) ) );
+        $db = ezcDbInstance::get();
+        $q = $db->createInsertQuery();
+        $q->insertInto( $db->quoteIdentifier( $this->options->tableName ) )
+          ->set( $db->quoteIdentifier( $this->options->userIdField ), $q->bindValue( $username ) )
+          ->set( $db->quoteIdentifier( $this->options->passwordField ), $q->bindValue( $this->hashPassword( $password ) ) );
         foreach ( $extraInfo as $key => $value )
         {
-            $q->set( $key, $q->bindValue( $value ) );
+            $q->set( $db->quoteIdentifier( (string) $key ), $q->bindValue( $value ) );
         }
         $s = $q->prepare();
         $s->execute();
