@@ -442,7 +442,8 @@ class ezcMvcAuthenticationFilter
 
         foreach ( $reasons as $line )
         {
-            list( $key, $value ) = each( $line );
+            $value = current( $line );
+            $key = key( $line );
             $reasonText[] = $errorMap[$key][$value];
         }
         $res->variables['ezcAuth_reasons']  = $reasonText;
