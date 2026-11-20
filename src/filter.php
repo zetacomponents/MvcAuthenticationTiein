@@ -386,8 +386,9 @@ class ezcMvcAuthenticationFilter
      *
      * This method creates a user in the configured user table (through the
      * options for this class). You can specify extra information as a
-     * key->value pair array as $extraInfo.  This method does *not* check
-     * whether a user already exists.
+     * key->value pair array as $extraInfo. The keys are the column names, they
+     * are quoted as identifiers. This method does *not* check whether a user
+     * already exists.
      *
      * @param string $username
      * @param string $password
@@ -395,13 +396,14 @@ class ezcMvcAuthenticationFilter
      */
     public function createUser( $username, $password, array $extraInfo )
     {
-        $q = ezcDbInstance::get()->createInsertQuery();
-        $q->insertInto( $this->options->tableName )
-          ->set( $this->options->userIdField, $q->bindValue( $username ) )
-          ->set( $this->options->passwordField, $q->bindValue( $this->hashPassword( $password ) ) );
+        $db = ezcDbInstance::get();
+        $q = $db->createInsertQuery();
+        $q->insertInto( $db->quoteIdentifier( $this->options->tableName ) )
+          ->set( $db->quoteIdentifier( $this->options->userIdField ), $q->bindValue( $username ) )
+          ->set( $db->quoteIdentifier( $this->options->passwordField ), $q->bindValue( $this->hashPassword( $password ) ) );
         foreach ( $extraInfo as $key => $value )
         {
-            $q->set( $key, $q->bindValue( $value ) );
+            $q->set( $db->quoteIdentifier( (string) $key ), $q->bindValue( $value ) );
         }
         $s = $q->prepare();
         $s->execute();
