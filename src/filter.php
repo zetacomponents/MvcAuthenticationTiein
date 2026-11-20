@@ -191,7 +191,10 @@ class ezcMvcAuthenticationFilter
             $password = null;
         }
 
-        $credentials = new ezcAuthenticationPasswordCredentials( $user, $this->hashPassword( $password ) );
+        // no password to hash, e.g. for a user from the session
+        $hash = $password === null ? null : $this->hashPassword( $password );
+
+        $credentials = new ezcAuthenticationPasswordCredentials( $user, $hash );
         $authentication = new ezcAuthentication( $credentials );
         $authentication->session = $session;
         $authentication->addFilter( $databaseFilter );
