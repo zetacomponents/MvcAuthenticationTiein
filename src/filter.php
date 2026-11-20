@@ -348,24 +348,25 @@ class ezcMvcAuthenticationFilter
     }
 
     /**
-     * Returns a generated basic password depending on the $username.
+     * Returns a random password of 12 lower case letters and digits.
      *
      * This method is typically called from the "register" action after a user
-     * ID has been checked for existance.
+     * ID has been checked for existance. The password is generated with
+     * random_int(), a cryptographically secure generator; $username is not
+     * used, the parameter is kept for compatibility.
      *
      * @param string $username
      * @return string
      */
     public function generatePassword( $username )
     {
-        // generate password
-        mt_srand(
-            base_convert( substr( md5( $username ), 0, 6 ), 36, 10 ) *
-            microtime( true )
-        );
-        $a = base_convert( mt_rand(), 10, 36 );
-        $b = base_convert( mt_rand(), 10, 36 );
-        $password = substr( $b . $a, 1, 8 );
+        $chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+        $max = strlen( $chars ) - 1;
+        $password = '';
+        for ( $i = 0; $i < 12; $i++ )
+        {
+            $password .= $chars[random_int( 0, $max )];
+        }
 
         return $password;
     }
